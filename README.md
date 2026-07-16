@@ -1,92 +1,87 @@
-# Prox Founding Engineer Challenge
+# Vulcan OmniPro 220 — Welding Assistant
 
-<img src="product.webp" alt="Vulcan OmniPro 220" width="400" /> <img src="product-inside.webp" alt="Vulcan OmniPro 220 — inside panel" width="400" />
+A multimodal support agent for the Vulcan OmniPro 220 welder, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview). It answers setup/settings/troubleshooting questions by actually reading the source PDFs at query time — via its own vision, page by page — and shows the user the real manual pages and generated interactive artifacts inline, instead of describing them in prose.
 
-## The Product
+The original assignment prompt is preserved in [CHALLENGE.md](CHALLENGE.md).
 
-The [Vulcan OmniPro 220](https://www.harborfreight.com/omnipro-220-industrial-multiprocess-welder-with-120240v-input-57812.html) is a multiprocess welding system sold by Harbor Freight. It supports four welding processes (MIG, Flux-Cored, TIG, and Stick), runs on both 120V and 240V input, and has an LCD-based synergic control system.
+## Quick start
 
-Its owner's manual is 48 pages of dense technical content. Duty cycle matrices across multiple voltages and amperages, polarity setup procedures that differ per welding process, wire feed mechanisms with specific tensioner calibrations, wiring schematics, troubleshooting matrices, weld diagnosis diagrams, and a full parts list.
+```bash
+git clone <this-repo>
+cd prox-challenge
+cp .env.example .env   # add your ANTHROPIC_API_KEY
+npm install
+npm run dev
+```
 
-This is exactly the kind of product Prox exists for. Nobody knows how to use this machine straight out of the box but has time to read 48 page manual, but a complicated machine needs expert-level support.
+Open **http://localhost:5173**. That's it — `npm run dev` runs the Express backend (`:3001`) and the Vite frontend (`:5173`, proxying `/api` to the backend) together via `concurrently`.
 
-Additional video: https://www.youtube.com/watch?v=kxGDoGcnhBw
+- `AGENT_MODEL` (optional, in `.env`) overrides the model — defaults to `claude-opus-4-8`.
+- `PORT` (optional) overrides the backend port — defaults to `3001`.
 
-## Your Job
-
-Build a multimodal reasoning agent for the Vulcan OmniPro 220 using the Claude Agent SDK. The agent must be able to answer deep technical questions about this product accurately, helpfully, and not just in text.
-
-The manuals are in the `files/` directory.
-
-**There is no limit to how far you can go.** You can integrate voice. You can build a full interactive experience. Sky is the limit. The more ambitious and polished, the better.
-
-## What We're Testing
-
-### 1. Deep Technical Accuracy
-
-Your agent needs to answer questions like these correctly:
+## Try it
 
 - "What's the duty cycle for MIG welding at 200A on 240V?"
 - "I'm getting porosity in my flux-cored welds. What should I check?"
 - "What polarity setup do I need for TIG welding? Which socket does the ground clamp go in?"
+- "Build me a settings configurator: process + material + thickness → wire speed and voltage."
 
-We will test with questions that require cross-referencing multiple manual sections, understanding visual content (diagrams, schematics, charts), and handling ambiguous questions that need clarification from the user.
+## How it works
 
-### 2. Multimodal Responses
-
-This is the most important part. Your agent must not be text-only.
-
-- If someone asks about polarity setup, the agent should draw or show a diagram of which cable goes in which socket, not just describe it.
-- If the answer relates to a specific image in the manual (the wire feed mechanism, the front panel controls, the weld diagnosis examples), the agent should surface that image.
-- If a question is complex enough, the agent should generate interactive content: a duty cycle calculator, a troubleshooting flowchart, a settings configurator that takes process + material + thickness and outputs recommended wire speed and voltage.
-
-When something is too cognitively hard to explain in words, the agent should draw it. Real-time diagrams, interactive schematics, visual walkthroughs generated through code.
-
-For your agent to handle these responses well you need to reverse engineer Claude artifacts. Here are two places where you can start:
-- https://claude.ai/artifacts (see how Claude renders interactive artifacts in chat)
-- https://www.reidbarber.com/blog/reverse-engineering-claude-artifacts
-
-### 3. Tone and Helpfulness
-
-Imagine your user just bought this welder and is standing in their garage trying to set it up. They're not an idiot, but they're not a professional welder either.
-
-### 4. Knowledge Extraction Quality
-
-The manual has a mix of text, tables, labeled diagrams, schematics, and decision matrices. Some critical information exists only in images (the welding process selection chart, the weld diagnosis photos, the wiring schematic). We want to see that your agent understands and presents the visual content, not just the text.
-
-## Tech Requirements
-
-- Use the [Anthropic Claude Agent SDK](https://docs.anthropic.com) as the foundation for your agent.
-- The project must run locally with a single API key provided via `.env`.
-- You are responsible for your own API costs during development.
-
-## How to Present Your Work
-
-**This matters.** Your submission is not just the code — it's how you present it.
-
-- **Build a frontend.** The best way for us to evaluate your agent is if it has a clean, simple UI we can run immediately. This is realistically the only way to properly demo an agent like this.
-- **Hosting is a plus.** If you host it somewhere we can access without cloning, that's a strong signal. Not required, but it removes friction and shows initiative.
-- **Write a clear README.** Explain how your agent works, what design decisions you made, how knowledge is extracted and represented, and how to run it. Your documentation will be evaluated — we want to see how you think and communicate, not just how you code.
-- **Video walkthrough is a huge plus.** Record yourself demoing the agent and explaining your approach. Walk through the hard questions, show how it handles multimodal responses, explain your architecture. This gives us a much richer picture of your work than code alone.
-
-We should be running your agent within 2 minutes of cloning your repo:
-
-```bash
-git clone <your-fork>
-cd <your-fork>
-cp .env.example .env   # we plug in our own Anthropic API key
-# your install command (npm install, uv install, etc.)
-# your run command (npm run dev, python app.py, etc.)
+```
+Browser (React/Vite)  ──POST /api/chat──▶  Express (SSE)  ──▶  Claude Agent SDK query()
+      ▲                                         │                       │
+      │                images / artifacts       │                       ▼
+      └─────────────────────────────────────────┘        custom in-process MCP tools:
+                                                           read_manual_pages · create_artifact
 ```
 
-If it takes longer than that to set up, that's a problem.
+The frontend sends the whole conversation so far as JSON; the backend folds it into a single prompt string and calls `query()` fresh per request — the server holds no session state of its own (see "Design decisions" below). The response comes back as Server-Sent Events: text deltas as Claude streams them, plus `image`/`artifact` events emitted the instant a tool fires, so the manual page or the generated widget appears inline exactly when the agent looks at it or builds it.
 
-## What to Submit
+### Knowledge extraction — the agent reads the actual manual, not a summary
 
-1. Fork this repo.
-2. Build your solution.
-3. Submit your fork URL through the form at [useprox.com/join/challenge](https://useprox.com/join/challenge).
+This was the most important decision in the project, and I changed course on it once already. My first pass hand-transcribed the manual's tables and facts into a big markdown string embedded in the system prompt — classic RAG-lite. I scrapped it: it meant *my* reading of the manual, not the agent's, was what actually got tested, and any transcription slip on my part becomes an invisible, hard-to-catch bug baked into every answer.
 
-## What Happens Next
+Instead:
 
-We review submissions on a rolling basis and respond to every single one within a few days. Good luck.
+- `files/*.pdf` are rendered once, offline, to PNG page images via `pdftoppm` (`web/public/manual/<doc>/page-NN.png` — 51 images total, ~18MB, committed to the repo). This is a pure rasterization step, not a comprehension step — no facts, tables, or summaries are extracted, just pixels.
+- The agent's only source of product knowledge is the `read_manual_pages` tool (`server/src/tools/manualTools.ts`), which loads the requested page(s) as real images and passes them to Claude as native image content in the tool result — Claude reads them with its own vision, live, every time.
+- The agent has **no pre-built table of contents or index either**. The system prompt (`server/src/agent/systemPrompt.ts`) just tells it that page 2 of the 48-page owner's manual is *that document's own* Table of Contents, and to read it first if it doesn't already know where something is — the same way a person would open the manual. From there it decides which pages to open, including cross-referencing pages across the three source documents (owner's manual, quick-start guide, selection chart) for questions that span them.
+- Every number the agent states (amperage, voltage, SCFH, gauge, duty-cycle %) is grounded in a page it just looked at this turn, or earlier in the same conversation. The system prompt explicitly forbids answering from assumed/general welding knowledge.
+
+The only content-shaped thing I wrote by hand is a few sentences of *strategy* ("read p.2 first if you're not sure where to look") — zero manual content is pre-authored anywhere in the codebase.
+
+### Multimodal responses
+
+`read_manual_pages` does double duty: the same tool call that grounds the agent's answer also pushes the page image straight to the frontend via SSE, so "the agent looked at page 24" and "the user sees page 24" are the same event. This is why diagrams, the polarity setup pages, the weld-diagnosis charts, the wiring schematic, and the process-selection poster show up as real images rather than descriptions — showing them costs the agent nothing extra over reading them.
+
+For anything not already a picture in the manual — a duty-cycle calculator, a troubleshooting flowchart, a settings configurator — the agent calls `create_artifact` with a self-contained HTML/CSS/JS string. The frontend renders it in a sandboxed `<iframe sandbox="allow-scripts">` with no `allow-same-origin`, matching how Claude.ai artifacts isolate untrusted generated code: scripts run, but the iframe can't touch this page's cookies/storage, navigate it, or reach the network. The system prompt instructs the agent to read the relevant manual pages *before* building an artifact, so any numbers baked into it (e.g. duty-cycle percentages) come from the same grounding as a text answer would.
+
+### Design decisions & tradeoffs
+
+- **Stateless backend.** The client resends the full message history every turn (mirroring how the raw Messages API works), and the server builds one prompt string per request (`server/src/agent/transcript.ts`) rather than using the Agent SDK's own session persistence/resume. Simpler to reason about, nothing to garbage-collect, and it survives a server restart mid-conversation — at the cost of not getting the SDK's built-in session caching.
+- **Every built-in Claude Code tool is disabled** (`tools: []`) — Bash, Read, Write, WebSearch, etc. all off. `allowedTools` only lists the two custom MCP tools. This agent should only ever look at the manual or render an artifact, nothing else.
+- **Token-level streaming** via `includePartialMessages: true`, so text appears incrementally rather than in one lump per turn.
+- **Model defaults to `claude-opus-4-8`.** This is a vision-heavy, correctness-critical, multi-hop-reasoning task (cross-referencing pages, reading dense tables/diagrams), which is where the extra intelligence pays for itself; it's configurable via `AGENT_MODEL` if you'd rather trade some accuracy for lower cost. Each query typically reads a handful of page images, so cost is meaningfully higher than a text-only chatbot — expect roughly $0.05–$0.40 per query depending on how many pages/artifacts it produces (you're billed directly by Anthropic; there's no markup or proxy here).
+
+## Project structure
+
+```
+files/                        source PDFs (owner's manual, quick-start guide, selection chart)
+web/public/manual/<doc>/       pre-rendered page PNGs (offline, one-time, via pdftoppm)
+server/src/
+  index.ts                    Express app, SSE /api/chat endpoint
+  agent/systemPrompt.ts       the agent's instructions (strategy only, no manual content)
+  agent/transcript.ts         folds client message history into one prompt string
+  tools/manualTools.ts        read_manual_pages + create_artifact (Agent SDK custom MCP tools)
+  knowledge/manifest.ts       page counts / file paths for the two tools (plumbing, not content)
+web/src/
+  App.tsx                     chat state machine, SSE consumption
+  components/                 MessageBubble, ImageCard (+ lightbox), ArtifactFrame (sandboxed iframe)
+```
+
+## Known limitations
+
+- The owner's manual repeatedly points to a **settings chart printed on the inside of the welder's door** (shielding-gas type/flow by material) that isn't included among the provided files — only `owner-manual.pdf`, `quick-start-guide.pdf`, and `selection-chart.pdf` were. If asked for anything only covered by that physical sticker, the agent is instructed to say so rather than invent a number.
+- No auth, no multi-user session storage, no persistence across a server restart — this is a local take-home demo, not a hardened multi-tenant service.
+- The chat holds one conversation per browser session (in React state); refreshing the page starts over.
